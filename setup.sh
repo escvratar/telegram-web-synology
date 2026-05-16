@@ -128,17 +128,10 @@ ok ".env"
 
 cat > "$INSTALL_DIR/nginx.conf" <<'NGINX'
 server {
-    listen 443 ssl;
+    listen 80;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
-
-    ssl_certificate     /etc/nginx/ssl/cert.pem;
-    ssl_certificate_key /etc/nginx/ssl/key.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-
-    # Если зашли по http:// на https-порт — редиректим на https
-    error_page 497 =301 https://$host:$server_port$request_uri;
 
     gzip on; gzip_vary on; gzip_min_length 1024;
     gzip_types text/plain text/css text/xml application/javascript
@@ -168,10 +161,9 @@ cat > "$INSTALL_DIR/Dockerfile" <<'DOCKERFILE'
 FROM nginx:1.27-alpine
 COPY dist/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY ssl/ /etc/nginx/ssl/
-EXPOSE 443
+EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- --no-check-certificate https://localhost/ || exit 1
+  CMD wget -qO- http://localhost/ || exit 1
 DOCKERFILE
 ok "Dockerfile"
 
@@ -182,33 +174,17 @@ services:
     container_name: telegram-web
     restart: unless-stopped
     ports:
-      - "${HOST_PORT}:443"
+      - "${HOST_PORT}:80"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://localhost/"]
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
       interval: 30s
       timeout: 5s
       retries: 3
 COMPOSE
 ok "docker-compose.yml"
 
-# ── SSL-сертификат (самоподписанный) ─────────────────────────────────────────
-# Telegram Web A требует secure context (HTTPS): по HTTP браузер отключает
-# crypto.subtle и SharedArrayBuffer → приложение пишет "browser not supported".
 SYNO_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 SYNO_IP="${SYNO_IP:-127.0.0.1}"
-mkdir -p "$INSTALL_DIR/ssl"
-if [ -f "$INSTALL_DIR/ssl/cert.pem" ] && [ -f "$INSTALL_DIR/ssl/key.pem" ]; then
-    ok "SSL-сертификат уже есть"
-else
-    inf "Генерируем самоподписанный SSL-сертификат для $SYNO_IP..."
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$INSTALL_DIR/ssl/key.pem" \
-        -out    "$INSTALL_DIR/ssl/cert.pem" \
-        -subj   "/CN=$SYNO_IP" \
-        -addext "subjectAltName=IP:$SYNO_IP" >/dev/null 2>&1 \
-      || err "Не удалось создать SSL-сертификат (нужен openssl)"
-    ok "SSL-сертификат создан"
-fi
 
 # ── 7. Сборка telegram-tt на хосте ───────────────────────────────────────────
 hdr "Сборка telegram-tt (на хосте, не внутри Docker)"
@@ -296,12 +272,28 @@ ok "Контейнер запущен"
 echo
 echo -e "${GRN}===========================================${NC}"
 echo -e "${WHT}  Telegram Web A готов!${NC}"
-echo -e "  Браузер: ${CYN}https://${SYNO_IP}:${HOST_PORT}${NC}"
-echo -e "${YLW}  ВАЖНО: открывайте именно https:// (не http://)${NC}"
-echo -e "${YLW}  Браузер покажет предупреждение о сертификате — нажмите${NC}"
-echo -e "${YLW}  'Дополнительно' -> 'Перейти на сайт'. Это самоподписанный${NC}"
-echo -e "${YLW}  сертификат, для локальной сети это нормально.${NC}"
+echo -e "  Контейнер отдаёт HTTP: ${CYN}http://${SYNO_IP}:${HOST_PORT}${NC}"
 echo -e "${GRN}===========================================${NC}"
+echo
+echo -e "${YLW}  !!! ОБЯЗАТЕЛЬНО: настройте обратный прокси (reverse proxy) !!!${NC}"
+echo
+echo "  Telegram Web работает ТОЛЬКО по HTTPS: по обычному HTTP браузер"
+echo "  отключает crypto.subtle и SharedArrayBuffer, и приложение пишет"
+echo "  'browser not supported'. Контейнер отдаёт HTTP — HTTPS должен"
+echo "  обеспечить обратный прокси DSM с настоящим сертификатом."
+echo
+echo "  Как настроить в DSM:"
+echo "    1. Панель управления -> Портал входа -> Дополнительно"
+echo "       -> Обратный прокси-сервер -> Создать"
+echo "    2. Источник:   Протокол HTTPS, имя хоста — ваше (напр."
+echo "       telegram.ваш-nas.synology.me), порт — любой свободный"
+echo "    3. Назначение: Протокол HTTP, имя хоста localhost,"
+echo "       порт ${HOST_PORT}"
+echo "    4. Вкладка 'Пользовательский заголовок' -> Создать -> WebSocket"
+echo "    5. Сохранить. Сертификат назначьте в Панель управления"
+echo "       -> Безопасность -> Сертификат (можно бесплатный Let's Encrypt)"
+echo
+echo "  После этого открывайте Telegram по адресу обратного прокси (https://)."
 echo
 echo "  Остановить:  cd $INSTALL_DIR && $COMPOSE down"
 echo "  Логи:        cd $INSTALL_DIR && $COMPOSE logs -f"
