@@ -1,0 +1,15 @@
+# Личные данные и секреты — НИКОГДА не коммитить
+synology.pass
+deploy.config
+
+# Утилиты, скачиваются deploy.bat автоматически
+plink.exe
+pscp.exe
+
+# Артефакты сборки (создаются на Synology, не в репозитории)
+dist/
+.build/
+.env
+ssl/
+*.pem
+*.key

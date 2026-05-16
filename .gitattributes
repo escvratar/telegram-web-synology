@@ -1,0 +1,5 @@
+# setup.sh запускается на Linux (Synology) — всегда LF, иначе скрипт сломается
+*.sh text eol=lf
+
+# deploy.bat запускается на Windows — всегда CRLF
+*.bat text eol=crlf
