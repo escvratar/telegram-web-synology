@@ -127,11 +127,37 @@ ENV
 ok ".env"
 
 cat > "$INSTALL_DIR/nginx.conf" <<'NGINX'
+# ── Проксирование трафика Telegram через NAS ───────────────────────────
+# telegram-tt пропатчен (см. setup.sh): оба транспорта идут на сам NAS:
+#   основной  — WebSocket  -> /mtproxy-ws/<порт>/<хост>/apiws
+#   запасной  — HTTP       -> /mtproxy/<порт>/<хост>/apiw1
+# nginx форвардит это на реальные серверы Telegram. Цепочка:
+# браузер -> NAS -> серверы Telegram. Работает, даже если у клиента
+# Telegram заблокирован — лишь бы доступ был у самого NAS.
+#
+# HTTP-транспорт привязан к TCP-соединению: если открывать новое
+# соединение на каждый POST, Telegram отвечает 400/404. Поэтому на каждый
+# веб-шлюз — отдельный upstream с keepalive (соединения переиспользуются).
+upstream tg_dc1 { server zws1.web.telegram.org:443; keepalive 32; }
+upstream tg_dc2 { server zws2.web.telegram.org:443; keepalive 32; }
+upstream tg_dc3 { server zws3.web.telegram.org:443; keepalive 32; }
+upstream tg_dc4 { server zws4.web.telegram.org:443; keepalive 32; }
+upstream tg_dc5 { server zws5.web.telegram.org:443; keepalive 32; }
+
+# Заголовок Connection для проксирования WebSocket
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    # DNS-резолвер нужен для запасного proxy_pass с переменными
+    resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
 
     gzip on; gzip_vary on; gzip_min_length 1024;
     gzip_types text/plain text/css text/xml application/javascript
@@ -142,6 +168,111 @@ server {
     add_header Referrer-Policy         "strict-origin" always;
     add_header Cross-Origin-Opener-Policy   "same-origin"  always;
     add_header Cross-Origin-Embedder-Policy "require-corp" always;
+
+    # Основной транспорт — WebSocket. Одно постоянное соединение на сессию,
+    # nginx тоннелирует его насквозь. Это и быстро, и без флапанья.
+    location ~ ^/mtproxy-ws/\d+/([^/]+)(/apiws.*)$ {
+        set $tg_host $1;
+        set $tg_path $2;
+        proxy_pass https://$tg_host:443$tg_path;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        $tg_host;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       $tg_host;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location ~ ^/mtproxy/\d+/zws1\.web\.telegram\.org(/apiw1.*)$ {
+        rewrite ^/mtproxy/\d+/zws1\.web\.telegram\.org(/apiw1.*)$ $1 break;
+        proxy_pass https://tg_dc1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        zws1.web.telegram.org;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       zws1.web.telegram.org;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
+    location ~ ^/mtproxy/\d+/zws2\.web\.telegram\.org(/apiw1.*)$ {
+        rewrite ^/mtproxy/\d+/zws2\.web\.telegram\.org(/apiw1.*)$ $1 break;
+        proxy_pass https://tg_dc2;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        zws2.web.telegram.org;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       zws2.web.telegram.org;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
+    location ~ ^/mtproxy/\d+/zws3\.web\.telegram\.org(/apiw1.*)$ {
+        rewrite ^/mtproxy/\d+/zws3\.web\.telegram\.org(/apiw1.*)$ $1 break;
+        proxy_pass https://tg_dc3;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        zws3.web.telegram.org;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       zws3.web.telegram.org;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
+    location ~ ^/mtproxy/\d+/zws4\.web\.telegram\.org(/apiw1.*)$ {
+        rewrite ^/mtproxy/\d+/zws4\.web\.telegram\.org(/apiw1.*)$ $1 break;
+        proxy_pass https://tg_dc4;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        zws4.web.telegram.org;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       zws4.web.telegram.org;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
+    location ~ ^/mtproxy/\d+/zws5\.web\.telegram\.org(/apiw1.*)$ {
+        rewrite ^/mtproxy/\d+/zws5\.web\.telegram\.org(/apiw1.*)$ $1 break;
+        proxy_pass https://tg_dc5;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        zws5.web.telegram.org;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       zws5.web.telegram.org;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
+
+    # Запасной путь для прочих хостов (без keepalive — может флапать)
+    location ~ ^/mtproxy/\d+/([^/]+)(/apiw1.*)$ {
+        set $tg_host $1;
+        set $tg_path $2;
+        proxy_pass https://$tg_host:443$tg_path;
+        proxy_ssl_server_name on;
+        proxy_ssl_name        $tg_host;
+        proxy_ssl_verify      off;
+        proxy_http_version 1.1;
+        proxy_set_header Host       $tg_host;
+        proxy_set_header Connection "";
+        proxy_buffering    off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 0;
+    }
 
     location / { try_files $uri $uri/ /index.html; }
 
@@ -230,6 +361,41 @@ TELEGRAM_API_ID=${API_ID}
 TELEGRAM_API_HASH=${API_HASH}
 EOF
 
+# Патч проксирования: telegram-tt по умолчанию ходит на серверы Telegram
+# напрямую. У него два транспорта — основной WebSocket (wss://.../apiws)
+# и запасной HTTP (https://.../apiw1). Перенаправляем оба на сам NAS, а
+# nginx форвардит их на Telegram. Цепочка: браузер -> NAS -> Telegram.
+inf "Патчим telegram-tt для проксирования трафика через NAS..."
+node -e '
+  const fs = require("fs");
+
+  function patch(file, pattern, repl) {
+    if (!fs.existsSync(file)) { console.error("Файл не найден: " + file); process.exit(1); }
+    let s = fs.readFileSync(file, "utf8");
+    if (s.indexOf("/mtproxy") !== -1) { console.log("  " + file + ": уже пропатчено"); return; }
+    const before = s;
+    s = s.replace(pattern, repl);
+    if (s === before) { console.error("Шаблон не найден в " + file); process.exit(1); }
+    fs.writeFileSync(file, s);
+    console.log("  " + file + ": ок");
+  }
+
+  // Основной транспорт: wss://${ip}:${port}/apiws -> NAS
+  patch(
+    "src/lib/gramjs/extensions/PromisedWebSockets.ts",
+    /wss?:\/\/\$\{ip\}:\$\{port\}\/apiws/g,
+    "wss://${self.location.host}/mtproxy-ws/${port}/${ip}/apiws"
+  );
+
+  // Запасной транспорт: https://${ip}:${port}/apiw1 -> NAS
+  patch(
+    "src/lib/gramjs/extensions/HttpStream.ts",
+    /https?:\/\/\$\{ip\}:\$\{port\}\/apiw1/g,
+    "${self.location.origin}/mtproxy/${port}/${ip}/apiw1"
+  );
+' || err "Не удалось пропатчить telegram-tt"
+ok "Проксирование через NAS включено (WebSocket + HTTP)"
+
 unset NODE_OPTIONS
 inf "npm install (установка зависимостей)..."
 npm install
@@ -273,6 +439,7 @@ echo
 echo -e "${GRN}===========================================${NC}"
 echo -e "${WHT}  Telegram Web A готов!${NC}"
 echo -e "  Контейнер отдаёт HTTP: ${CYN}http://${SYNO_IP}:${HOST_PORT}${NC}"
+echo -e "  Трафик Telegram идёт через NAS (браузер -> NAS -> Telegram)"
 echo -e "${GRN}===========================================${NC}"
 echo
 echo -e "${YLW}  !!! ОБЯЗАТЕЛЬНО: настройте обратный прокси (reverse proxy) !!!${NC}"
